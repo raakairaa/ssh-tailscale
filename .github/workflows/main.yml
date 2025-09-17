@@ -1,47 +1,98 @@
-name: Simple SSH Server with Tailscale (Password Auth)
+name: Simple SSH Server with Tailscale (Password Auth, persistent)
 
 on:
   workflow_dispatch:
 
 jobs:
   ssh-via-tailscale:
+    # NOTE: timeout-minutes memperpanjang waktu maksimum job.
+    # GitHub masih dapat menerapkan batas maksimum; untuk "benar-benar tak terbatas" gunakan self-hosted runner.
     runs-on: ubuntu-latest
+    timeout-minutes: 43200  # contoh: 30 hari (ubah sesuai kebutuhan / batas organisasi)
+
     steps:
       - name: Install Tailscale
         uses: tailscale/github-action@v2
         with:
-          # PERBAIKAN: Gunakan 'authkey' sesuai dengan pesan error
+          # Pastikan secret TS_AUTHKEY terisi di repo settings -> Secrets
           authkey: ${{ secrets.TS_AUTHKEY }}
-          tags: tag:ci # Opsional, sesuaikan tag jika perlu
+          tags: tag:ci
 
       - name: Setup SSH server with a random password
         run: |
-          # Instal server SSH
+          set -euo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y openssh-server
-          
+          sudo apt-get install -y openssh-server openssl
+
           # Buat password acak yang aman
           SSH_PASSWORD=$(openssl rand -base64 12)
-          
+
           # Atur password untuk pengguna 'runner'
           echo "runner:$SSH_PASSWORD" | sudo chpasswd
-          
+
           # Pastikan login dengan password diizinkan
-          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo service ssh restart
-          
-          # Tampilkan detail login di log
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
+          sudo systemctl restart ssh || sudo service ssh restart || true
+
           echo "================================================="
           echo "                 DETAIL LOGIN SSH                "
           echo "================================================="
-          echo "Host (IP Tailscale): $(tailscale ip -4)"
+          echo "Host (IP Tailscale): $(tailscale ip -4 || echo 'tidak tersedia yet')"
           echo "User: runner"
           echo "Password: $SSH_PASSWORD"
           echo "================================================="
-          
-      - name: Keep workflow running
+
+          # Buat file sentinel (kosong) yang bisa dipakai untuk menghentikan loop dari luar:
+          sudo rm -f /tmp/STOP_ACTION
+          sudo touch /tmp/STOP_ACTION.disabled
+          sudo chmod 666 /tmp/STOP_ACTION.disabled
+
+          echo
+          echo "Catatan:"
+          echo " - Untuk menghentikan workflow lewat SSH, jalankan: sudo rm /tmp/STOP_ACTION.disabled && sudo touch /tmp/STOP_ACTION"
+          echo " - Atau hentikan workflow manual dari GitHub Actions UI."
+          echo
+
+      - name: Keep workflow running until sentinel or manual cancel
+        # run di foreground supaya job tetap hidup
         run: |
-          echo "Server SSH aktif. Workflow akan terus berjalan selama 1 jam."
-          echo "Anda bisa menghentikannya secara manual dari halaman Actions."
-          sleep 3600
+          set -euo pipefail
+
+          # alias file sentinel
+          STOP_FILE="/tmp/STOP_ACTION"
+
+          echo "Workflow akan terus berjalan hingga file sentinel ada atau sampai kamu cancel job di GitHub Actions."
+          echo "Sentinel default saat ini dinonaktifkan; untuk aktifkan via SSH jalankan:"
+          echo "  sudo rm /tmp/STOP_ACTION.disabled && sudo touch /tmp/STOP_ACTION"
+          echo
+
+          # Hapus disabled sentinel jika ada, tetapi jangan buat STOP_FILE
+          sudo rm -f /tmp/STOP_ACTION || true
+
+          # Loop utama: tampilkan heartbeat & IP tailscale setiap 60 detik,
+          # dan cek keberadaan sentinel file untuk keluar bersih.
+          while true; do
+            echo "===== $(date) - ALIVE ====="
+            # Tampilkan IP Tailscale bila tersedia
+            if tailscale ip -4 >/dev/null 2>&1; then
+              echo "Tailscale IPv4: $(tailscale ip -4)"
+            else
+              echo "Tailscale belum siap / ip tidak tersedia."
+            fi
+
+            # Optional: tampilkan status tailscale
+            tailscale status || true
+
+            # Cek apakah sentinel dibuat (oleh user via SSH)
+            if [ -f "$STOP_FILE" ]; then
+              echo "Ditemukan sentinel '$STOP_FILE' — menghentikan workflow dengan bersih."
+              # bersihkan sentinel agar tidak tertinggal
+              sudo rm -f "$STOP_FILE" || true
+              exit 0
+            fi
+
+            # Tidur 60 detik sebelum next heartbeat
+            sleep 60
+          done
