@@ -1,0 +1,47 @@
+name: Simple SSH Server with Tailscale (Password Auth)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ssh-via-tailscale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          # Gunakan 'api-key', bukan 'authkey'
+          api-key: ${{ secrets.TS_AUTHKEY }}
+          tags: tag:ci # Opsional, sesuaikan tag jika perlu
+
+      - name: Setup SSH server with a random password
+        run: |
+          # Instal server SSH
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          
+          # Buat password acak yang aman
+          SSH_PASSWORD=$(openssl rand -base64 12)
+          
+          # Atur password untuk pengguna 'runner'
+          echo "runner:$SSH_PASSWORD" | sudo chpasswd
+          
+          # Pastikan login dengan password diizinkan (biasanya sudah default)
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo service ssh restart
+          
+          # Tampilkan detail login di log
+          echo "================================================="
+          echo "                 DETAIL LOGIN SSH                "
+          echo "================================================="
+          echo "Host (IP Tailscale): $(tailscale ip -4)"
+          echo "User: runner"
+          echo "Password: $SSH_PASSWORD"
+          echo "================================================="
+          
+      - name: Keep workflow running
+        run: |
+          echo "Server SSH aktif. Workflow akan terus berjalan selama 1 jam."
+          echo "Anda bisa menghentikannya secara manual dari halaman Actions."
+          sleep 3600
