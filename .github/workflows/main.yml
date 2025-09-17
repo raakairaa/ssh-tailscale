@@ -10,8 +10,8 @@ jobs:
       - name: Install Tailscale
         uses: tailscale/github-action@v2
         with:
-          # Gunakan 'api-key', bukan 'authkey'
-          api-key: ${{ secrets.TS_AUTHKEY }}
+          # PERBAIKAN: Gunakan 'authkey' sesuai dengan pesan error
+          authkey: ${{ secrets.TS_AUTHKEY }}
           tags: tag:ci # Opsional, sesuaikan tag jika perlu
 
       - name: Setup SSH server with a random password
@@ -26,7 +26,7 @@ jobs:
           # Atur password untuk pengguna 'runner'
           echo "runner:$SSH_PASSWORD" | sudo chpasswd
           
-          # Pastikan login dengan password diizinkan (biasanya sudah default)
+          # Pastikan login dengan password diizinkan
           sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo service ssh restart
